@@ -4,12 +4,11 @@ const mineflayer = require('mineflayer');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Standard web routing endpoint to satisfy Vercel's framework deployments
 app.get('/', (req, res) => {
   res.send('Minecraft Bot Keep-Alive Status: Active');
 });
 
-// The serverless API runner that handles logging into your game server
+// Using an async function with an explicit Promise tracker
 app.get('/ping-bot', async (req, res) => {
   console.log('[Bot Activity] Received wake up request. Connecting...');
   
@@ -20,29 +19,49 @@ app.get('/ping-bot', async (req, res) => {
     version: '1.21.1'               
   };
 
+  // We wrap the bot in a Promise to FORCE Vercel to stay open until it finishes
+  const runBotTask = () => {
+    return new Promise((resolve, reject) => {
+      try {
+        const bot = mineflayer.createBot(botOptions);
+
+        // Set a safety timeout so the serverless function doesn't hang forever
+        const safetyTimer = setTimeout(() => {
+          bot.quit();
+          reject(new Error('Connection timed out before spawn could occur.'));
+        }, 35000); 
+
+        bot.on('spawn', () => {
+          clearTimeout(safetyTimer);
+          console.log('[Bot Success] Connected to server! Simulating actions.');
+          
+          bot.setControlState('jump', true);
+          
+          setTimeout(() => {
+            bot.setControlState('jump', false);
+            bot.chat('Aternos server activity loop updated! 🤖');
+            bot.quit();
+            resolve('Successfully logged in, jumped, and disconnected.');
+          }, 12000); // Spend 12 seconds in world context to ensure it logs
+        });
+
+        bot.on('error', (err) => {
+          clearTimeout(safetyTimer);
+          reject(err);
+        });
+
+      } catch (error) {
+        reject(error);
+      }
+    });
+  };
+
   try {
-    const bot = mineflayer.createBot(botOptions);
-
-    bot.on('spawn', () => {
-      console.log('[Bot Success] Connected to server! Simulating movement parameters.');
-      
-      // Force individual actions to reset your Aternos instance shutdown timer
-      bot.setControlState('jump', true);
-      
-      setTimeout(() => {
-        bot.setControlState('jump', false);
-        bot.chat('Aternos server activity loop updated! 🤖');
-        bot.quit();
-        return res.status(200).json({ success: true, message: 'Server ping completed successfully!' });
-      }, 10000); // Spend 10 seconds in world context before disconnecting cleanly
-    });
-
-    bot.on('error', (err) => {
-      console.error('[Bot Error]:', err.message);
-      return res.status(500).json({ success: false, error: err.message });
-    });
-
+    const statusResult = await runBotTask();
+    console.log(`[System Success] ${statusResult}`);
+    return res.status(200).json({ success: true, message: statusResult });
   } catch (error) {
+    console.error('[System Failure]:', error.message);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
